@@ -4,10 +4,11 @@ import json
 import re
 from datetime import datetime
 from groq import Groq
+from openai import OpenAI
 from utils import execute_mcp_tool, handle_general_question
 from postgres_mcp_handler import PostgresMCPHandler
 
-class StreamlitMCPClient:
+class MCPClient:
     def __init__(self, db_config: dict):
         # Build PostgreSQL connection string
         conn_string = (
@@ -54,6 +55,7 @@ st.session_state.setdefault("tables", [])
 st.session_state.setdefault("schema_cache", {})
 st.session_state.setdefault("mcp_client", None)
 st.session_state.setdefault("groq_client", None)
+st.session_state.setdefault("openai_client", None)
 st.session_state.setdefault("ai_generated_questions", [])
 st.session_state.setdefault("questions_generated", False)
 st.session_state.setdefault("db_credentials", {
@@ -64,12 +66,14 @@ st.session_state.setdefault("db_credentials", {
     "password": ""
 })
 st.session_state.setdefault("groq_api_key", "")
+st.session_state.setdefault("openai_api_key", "")
+st.session_state.setdefault("selected_llm", "groq")
 st.session_state.setdefault("latest_answer", None)
 
 
 def create_mcp_client(credentials):
     try:
-        client = StreamlitMCPClient(credentials)
+        client = MCPClient(credentials)
         return client
     except Exception as e:
         st.error(f"Failed to create MCP client: {e}")
@@ -101,6 +105,18 @@ def init_groq_client(api_key):
     except Exception as e:
         return None, f"Failed to initialize AI client: {str(e)}"
 
+def init_openai_client(api_key):
+    try:
+        client = OpenAI(api_key=api_key)
+        client.chat.completions.create(
+            messages=[{"role": "user", "content": "Hello"}],
+            model="gpt-3.5-turbo",
+            max_tokens=10
+        )
+        return client, "OpenAI client initialized successfully"
+    except Exception as e:
+        return None, f"Failed to initialize OpenAI client: {str(e)}"
+
 def analyze_database_schema():
     if not st.session_state.mcp_client:
         return False, "No database connection"
@@ -126,8 +142,11 @@ def analyze_database_schema():
         return False, f"Schema analysis failed: {str(e)}"
 
 def generate_intelligent_questions(schema_details):
-    if not st.session_state.groq_client:
+    selected_llm = st.session_state.selected_llm
+    if (selected_llm == "groq" and not st.session_state.groq_client) or \
+       (selected_llm == "openai" and not st.session_state.openai_client):
         return []
+        
     schema_description = "Database Schema:\n\n"
     for table_name, columns in schema_details.items():
         if not table_name.endswith("_relationships") and isinstance(columns, list):
@@ -142,13 +161,23 @@ You are a database analyst. Based on this schema, generate 25 smart, diverse, na
 Return ONLY a JSON array: ["Q1", "Q2", ..., "Q25"]
 """
     try:
-        response = st.session_state.groq_client.chat.completions.create(
-            messages=[{"role": "system", "content": system_prompt.strip()}],
-            model="llama3-8b-8192",
-            temperature=0.3,
-            max_tokens=2000
-        )
-        questions_text = response.choices[0].message.content.strip()
+        if selected_llm == "groq":
+            response = st.session_state.groq_client.chat.completions.create(
+                messages=[{"role": "system", "content": system_prompt.strip()}],
+                model="llama3-8b-8192",
+                temperature=0.3,
+                max_tokens=2000
+            )
+            questions_text = response.choices[0].message.content.strip()
+        else:  # OpenAI
+            response = st.session_state.openai_client.chat.completions.create(
+                messages=[{"role": "system", "content": system_prompt.strip()}],
+                model="gpt-3.5-turbo",
+                temperature=0.3,
+                max_tokens=2000
+            )
+            questions_text = response.choices[0].message.content.strip()
+            
         start_idx = questions_text.find('[')
         end_idx = questions_text.rfind(']') + 1
         if start_idx != -1 and end_idx != 0:
@@ -164,23 +193,42 @@ Return ONLY a JSON array: ["Q1", "Q2", ..., "Q25"]
 with st.sidebar:
     st.title("Setup & Configuration")
     st.subheader("AI Configuration")
-    api_key_input = st.text_input("Groq API Key", value=st.session_state.groq_api_key, type="password")
+    
+    selected_llm = st.radio("Select LLM Provider", ["groq", "openai"], index=0 if st.session_state.selected_llm == "groq" else 1)
+    st.session_state.selected_llm = selected_llm
+    
+    if selected_llm == "groq":
+        api_key_input = st.text_input("Groq API Key", value=st.session_state.groq_api_key, type="password")
+        if api_key_input != st.session_state.groq_api_key:
+            st.session_state.groq_api_key = api_key_input
+            st.session_state.groq_client = None
 
-    if api_key_input != st.session_state.groq_api_key:
-        st.session_state.groq_api_key = api_key_input
-        st.session_state.groq_client = None
+        if st.session_state.groq_api_key and not st.session_state.groq_client:
+            with st.spinner("Initializing Groq..."):
+                client, message = init_groq_client(st.session_state.groq_api_key)
+                if client:
+                    st.session_state.groq_client = client
+                    st.success(message)
+                else:
+                    st.error(message)
+        elif st.session_state.groq_client:
+            st.success("Groq Client Ready")
+    else:  # OpenAI
+        api_key_input = st.text_input("OpenAI API Key", value=st.session_state.openai_api_key, type="password")
+        if api_key_input != st.session_state.openai_api_key:
+            st.session_state.openai_api_key = api_key_input
+            st.session_state.openai_client = None
 
-    if st.session_state.groq_api_key and not st.session_state.groq_client:
-        with st.spinner("Initializing AI..."):
-            client, message = init_groq_client(st.session_state.groq_api_key)
-            if client:
-                st.session_state.groq_client = client
-                st.success(message)
-            else:
-                st.error(message)
-
-    elif st.session_state.groq_client:
-        st.success("AI Client Ready")
+        if st.session_state.openai_api_key and not st.session_state.openai_client:
+            with st.spinner("Initializing OpenAI..."):
+                client, message = init_openai_client(st.session_state.openai_api_key)
+                if client:
+                    st.session_state.openai_client = client
+                    st.success(message)
+                else:
+                    st.error(message)
+        elif st.session_state.openai_client:
+            st.success("OpenAI Client Ready")
 
     st.divider()
 
@@ -194,8 +242,9 @@ with st.sidebar:
             password = st.text_input("Password", value=st.session_state.db_credentials.get("password", ""), type="password")
             submitted = st.form_submit_button("Connect to Database")
             if submitted:
-                if not st.session_state.groq_client:
-                    st.error("Please initialize the AI client first.")
+                if (st.session_state.selected_llm == "groq" and not st.session_state.groq_client) or \
+                   (st.session_state.selected_llm == "openai" and not st.session_state.openai_client):
+                    st.error(f"Please initialize the {st.session_state.selected_llm.upper()} client first.")
                 else:
                     st.session_state.db_credentials = {
                         "host": host, "port": port,
@@ -256,7 +305,8 @@ if st.session_state.page == "main":
     if not st.session_state.questions_generated:
         with st.spinner("Analyzing schema and generating questions..."):
             schema_success, schema_data = analyze_database_schema()
-            if schema_success and st.session_state.groq_client:
+            if schema_success and ((st.session_state.selected_llm == "groq" and st.session_state.groq_client) or 
+                                  (st.session_state.selected_llm == "openai" and st.session_state.openai_client)):
                 questions = generate_intelligent_questions(schema_data)
                 st.session_state.ai_generated_questions = questions
                 st.session_state.questions_generated = True
