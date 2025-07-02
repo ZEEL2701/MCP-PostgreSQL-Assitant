@@ -1,5 +1,4 @@
 import json
-from datetime import datetime
 import streamlit as st
 
 
@@ -35,12 +34,20 @@ def execute_mcp_tool(tool, **params):
 
 def handle_general_question(user_question):
     """MCP-compliant: LLM plans tool call → MCP runs it → LLM interprets result."""
-    groq_client = st.session_state.get("groq_client")
+    selected_llm = st.session_state.get("selected_llm", "groq")
+    
+    if selected_llm == "groq":
+        llm_client = st.session_state.get("groq_client")
+        model_name = "llama3-8b-8192"
+    else:  # OpenAI
+        llm_client = st.session_state.get("openai_client")
+        model_name = "gpt-3.5-turbo"
+        
     mcp_client = st.session_state.get("mcp_client")
     schema_cache = st.session_state.get("schema_cache", {})
 
-    if not groq_client or not mcp_client:
-        return "MCP client or AI is not initialized."
+    if not llm_client or not mcp_client:
+        return f"{selected_llm.upper()} client or MCP client is not initialized."
 
     # Step 1: Build schema context
     schema_summary = ""
@@ -80,9 +87,9 @@ User Question:
 """
 
     try:
-        response = groq_client.chat.completions.create(
+        response = llm_client.chat.completions.create(
             messages=[{"role": "user", "content": planning_prompt}],
-            model="llama3-8b-8192",
+            model=model_name,
             temperature=0,
             max_tokens=1000,
         )
@@ -131,9 +138,9 @@ Result:
 """
 
     try:
-        response = groq_client.chat.completions.create(
+        response = llm_client.chat.completions.create(
             messages=[{"role": "user", "content": interpretation_prompt}],
-            model="llama3-8b-8192",
+            model=model_name,
             temperature=0.7,
             max_tokens=1000,
         )
