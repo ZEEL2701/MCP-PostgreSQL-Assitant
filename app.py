@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 from groq import Groq
 from openai import OpenAI
+import google.generativeai as genai
 from utils import execute_mcp_tool, handle_general_question
 from postgres_mcp_handler import PostgresMCPHandler
 
@@ -56,6 +57,7 @@ st.session_state.setdefault("schema_cache", {})
 st.session_state.setdefault("mcp_client", None)
 st.session_state.setdefault("groq_client", None)
 st.session_state.setdefault("openai_client", None)
+st.session_state.setdefault("gemini_client", None)
 st.session_state.setdefault("ai_generated_questions", [])
 st.session_state.setdefault("questions_generated", False)
 st.session_state.setdefault("db_credentials", {
@@ -67,6 +69,7 @@ st.session_state.setdefault("db_credentials", {
 })
 st.session_state.setdefault("groq_api_key", "")
 st.session_state.setdefault("openai_api_key", "")
+st.session_state.setdefault("gemini_api_key", "")
 st.session_state.setdefault("selected_llm", "groq")
 st.session_state.setdefault("latest_answer", None)
 
@@ -98,7 +101,7 @@ def init_groq_client(api_key):
         client = Groq(api_key=api_key)
         client.chat.completions.create(
             messages=[{"role": "user", "content": "Hello"}],
-            model="llama3-8b-8192",
+            model="qwen-qwq-32b",
             max_tokens=10
         )
         return client, "AI client initialized successfully"
@@ -116,6 +119,15 @@ def init_openai_client(api_key):
         return client, "OpenAI client initialized successfully"
     except Exception as e:
         return None, f"Failed to initialize OpenAI client: {str(e)}"
+
+def init_gemini_client(api_key):
+    try:
+        genai.configure(api_key=api_key)
+        client = genai.GenerativeModel("gemini-2.0-flash")
+        response = client.generate_content("Hello from Gemini!")
+        return client, "Gemini client initialized successfully"
+    except Exception as e:
+        return None, f"Failed to initialize Gemini client: {str(e)}"
 
 def analyze_database_schema():
     if not st.session_state.mcp_client:
@@ -144,7 +156,8 @@ def analyze_database_schema():
 def generate_intelligent_questions(schema_details):
     selected_llm = st.session_state.selected_llm
     if (selected_llm == "groq" and not st.session_state.groq_client) or \
-       (selected_llm == "openai" and not st.session_state.openai_client):
+       (selected_llm == "openai" and not st.session_state.openai_client) or \
+       (selected_llm == "Gemini" and not st.session_state.gemini_client):
         return []
         
     schema_description = "Database Schema:\n\n"
@@ -154,8 +167,18 @@ def generate_intelligent_questions(schema_details):
             for col in columns:
                 schema_description += f"  - {col.get('column_name')} ({col.get('data_type')})\n"
     system_prompt = f"""
-You are a database analyst. Based on this schema, generate 25 smart, diverse, natural-language questions providing insights.
+You are an intelligent assistant that generates exploratory analytical questions 
+based on the following database schema:
 
+
+Please generate exactly 25 diverse, interesting, and meaningful questions that 
+someone might ask when analyzing this database. 
+
+- The questions should explore relationships, trends, anomalies, summaries, and possible business insights.
+- Phrase them clearly, like questions a data analyst would ask.
+- Format the output as a numbered list.
+
+Only output the list of questions.
 {schema_description}
 
 Return ONLY a JSON array: ["Q1", "Q2", ..., "Q25"]
@@ -164,12 +187,12 @@ Return ONLY a JSON array: ["Q1", "Q2", ..., "Q25"]
         if selected_llm == "groq":
             response = st.session_state.groq_client.chat.completions.create(
                 messages=[{"role": "system", "content": system_prompt.strip()}],
-                model="llama3-8b-8192",
+                model="qwen-qwq-32b",
                 temperature=0.3,
-                max_tokens=2000
+                max_tokens=4096
             )
             questions_text = response.choices[0].message.content.strip()
-        else:  # OpenAI
+        elif selected_llm == "openai":  # OpenAI
             response = st.session_state.openai_client.chat.completions.create(
                 messages=[{"role": "system", "content": system_prompt.strip()}],
                 model="gpt-3.5-turbo",
@@ -177,7 +200,14 @@ Return ONLY a JSON array: ["Q1", "Q2", ..., "Q25"]
                 max_tokens=2000
             )
             questions_text = response.choices[0].message.content.strip()
-            
+        elif selected_llm == "Gemini":
+            response = st.session_state.openai_client.chat.completions.create(
+                messages=[{"role": "system", "content": system_prompt.strip()}],
+                model="gemini-2.0-flash",
+                temperature=0.3,
+                max_tokens=2000
+            )
+
         start_idx = questions_text.find('[')
         end_idx = questions_text.rfind(']') + 1
         if start_idx != -1 and end_idx != 0:
@@ -194,7 +224,7 @@ with st.sidebar:
     st.title("Setup & Configuration")
     st.subheader("AI Configuration")
     
-    selected_llm = st.radio("Select LLM Provider", ["groq", "openai"], index=0 if st.session_state.selected_llm == "groq" else 1)
+    selected_llm = st.radio("Select LLM Provider", ["groq", "openai", "Gemini"], index=0 if st.session_state.selected_llm == "groq" else 1 if st.session_state.selected_llm == "openai"  else 2 if st.session_state.selected_llm == "Gemini" else 0)
     st.session_state.selected_llm = selected_llm
     
     if selected_llm == "groq":
@@ -213,7 +243,7 @@ with st.sidebar:
                     st.error(message)
         elif st.session_state.groq_client:
             st.success("Groq Client Ready")
-    else:  # OpenAI
+    elif selected_llm == "openai":  # OpenAI
         api_key_input = st.text_input("OpenAI API Key", value=st.session_state.openai_api_key, type="password")
         if api_key_input != st.session_state.openai_api_key:
             st.session_state.openai_api_key = api_key_input
@@ -229,6 +259,20 @@ with st.sidebar:
                     st.error(message)
         elif st.session_state.openai_client:
             st.success("OpenAI Client Ready")
+    elif selected_llm == "Gemini":
+        api_key_input = st.text_input("Gemini API Key", value=st.session_state.gemini_api_key, type="password")
+        if api_key_input != st.session_state.gemini_api_key:
+            st.session_state.gemini_api_key = api_key_input
+            st.session_state.gemini_client = None
+
+        if st.session_state.gemini_api_key and not st.session_state.gemini_client:
+            with st.spinner("Initializing Gemini..."):
+                client, message = init_gemini_client(st.session_state.gemini_api_key)
+                if client:
+                    st.session_state.gemini_client = client
+                    st.success(message)
+                else:
+                    st.error(message)
 
     st.divider()
 

@@ -39,9 +39,12 @@ def handle_general_question(user_question):
     if selected_llm == "groq":
         llm_client = st.session_state.get("groq_client")
         model_name = "llama3-8b-8192"
-    else:  # OpenAI
+    elif selected_llm == "openai":  # OpenAI
         llm_client = st.session_state.get("openai_client")
         model_name = "gpt-3.5-turbo"
+    elif selected_llm == "Gemini":
+        llm_client = st.session_state.get("gemini_client")
+        model_name = "gemini-2.0-flash"
         
     mcp_client = st.session_state.get("mcp_client")
     schema_cache = st.session_state.get("schema_cache", {})
