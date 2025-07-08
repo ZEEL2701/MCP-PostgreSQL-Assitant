@@ -5,6 +5,7 @@ import re
 from datetime import datetime
 from groq import Groq
 from openai import OpenAI
+import google.generativeai as genai
 from utils import execute_mcp_tool, handle_general_question
 from postgres_mcp_handler import PostgresMCPHandler
 
@@ -56,6 +57,7 @@ st.session_state.setdefault("schema_cache", {})
 st.session_state.setdefault("mcp_client", None)
 st.session_state.setdefault("groq_client", None)
 st.session_state.setdefault("openai_client", None)
+st.session_state.setdefault("gemini_client", None)
 st.session_state.setdefault("ai_generated_questions", [])
 st.session_state.setdefault("questions_generated", False)
 st.session_state.setdefault("db_credentials", {
@@ -67,6 +69,7 @@ st.session_state.setdefault("db_credentials", {
 })
 st.session_state.setdefault("groq_api_key", "")
 st.session_state.setdefault("openai_api_key", "")
+st.session_state.setdefault("gemini_api_key", "")
 st.session_state.setdefault("selected_llm", "groq")
 st.session_state.setdefault("latest_answer", None)
 
@@ -117,6 +120,16 @@ def init_openai_client(api_key):
     except Exception as e:
         return None, f"Failed to initialize OpenAI client: {str(e)}"
 
+def init_gemini_client(api_key):
+    try:
+        genai.configure(api_key=api_key)
+        # Test the API key with a simple request
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        response = model.generate_content("Hello")
+        return model, "Gemini client initialized successfully"
+    except Exception as e:
+        return None, f"Failed to initialize Gemini client: {str(e)}"
+
 def analyze_database_schema():
     if not st.session_state.mcp_client:
         return False, "No database connection"
@@ -144,7 +157,8 @@ def analyze_database_schema():
 def generate_intelligent_questions(schema_details):
     selected_llm = st.session_state.selected_llm
     if (selected_llm == "groq" and not st.session_state.groq_client) or \
-       (selected_llm == "openai" and not st.session_state.openai_client):
+       (selected_llm == "openai" and not st.session_state.openai_client) or \
+       (selected_llm == "gemini" and not st.session_state.gemini_client):
         return []
         
     schema_description = "Database Schema:\n\n"
@@ -169,7 +183,7 @@ Return ONLY a JSON array: ["Q1", "Q2", ..., "Q25"]
                 max_tokens=2000
             )
             questions_text = response.choices[0].message.content.strip()
-        else:  # OpenAI
+        elif selected_llm == "openai":  # OpenAI
             response = st.session_state.openai_client.chat.completions.create(
                 messages=[{"role": "system", "content": system_prompt.strip()}],
                 model="gpt-3.5-turbo",
@@ -177,6 +191,9 @@ Return ONLY a JSON array: ["Q1", "Q2", ..., "Q25"]
                 max_tokens=2000
             )
             questions_text = response.choices[0].message.content.strip()
+        else:  # Gemini
+            response = st.session_state.gemini_client.generate_content(system_prompt.strip())
+            questions_text = response.text.strip()
             
         start_idx = questions_text.find('[')
         end_idx = questions_text.rfind(']') + 1
@@ -194,7 +211,9 @@ with st.sidebar:
     st.title("Setup & Configuration")
     st.subheader("AI Configuration")
     
-    selected_llm = st.radio("Select LLM Provider", ["groq", "openai"], index=0 if st.session_state.selected_llm == "groq" else 1)
+    selected_llm = st.radio("Select LLM Provider", ["groq", "openai", "gemini"], 
+                           index=0 if st.session_state.selected_llm == "groq" else 
+                                 1 if st.session_state.selected_llm == "openai" else 2)
     st.session_state.selected_llm = selected_llm
     
     if selected_llm == "groq":
@@ -213,7 +232,7 @@ with st.sidebar:
                     st.error(message)
         elif st.session_state.groq_client:
             st.success("Groq Client Ready")
-    else:  # OpenAI
+    elif selected_llm == "openai":  # OpenAI
         api_key_input = st.text_input("OpenAI API Key", value=st.session_state.openai_api_key, type="password")
         if api_key_input != st.session_state.openai_api_key:
             st.session_state.openai_api_key = api_key_input
@@ -229,6 +248,22 @@ with st.sidebar:
                     st.error(message)
         elif st.session_state.openai_client:
             st.success("OpenAI Client Ready")
+    else:  # Gemini
+        api_key_input = st.text_input("Gemini API Key", value=st.session_state.gemini_api_key, type="password")
+        if api_key_input != st.session_state.gemini_api_key:
+            st.session_state.gemini_api_key = api_key_input
+            st.session_state.gemini_client = None
+
+        if st.session_state.gemini_api_key and not st.session_state.gemini_client:
+            with st.spinner("Initializing Gemini..."):
+                client, message = init_gemini_client(st.session_state.gemini_api_key)
+                if client:
+                    st.session_state.gemini_client = client
+                    st.success(message)
+                else:
+                    st.error(message)
+        elif st.session_state.gemini_client:
+            st.success("Gemini Client Ready")
 
     st.divider()
 
@@ -243,7 +278,8 @@ with st.sidebar:
             submitted = st.form_submit_button("Connect to Database")
             if submitted:
                 if (st.session_state.selected_llm == "groq" and not st.session_state.groq_client) or \
-                   (st.session_state.selected_llm == "openai" and not st.session_state.openai_client):
+                   (st.session_state.selected_llm == "openai" and not st.session_state.openai_client) or \
+                   (st.session_state.selected_llm == "gemini" and not st.session_state.gemini_client):
                     st.error(f"Please initialize the {st.session_state.selected_llm.upper()} client first.")
                 else:
                     st.session_state.db_credentials = {
@@ -306,7 +342,8 @@ if st.session_state.page == "main":
         with st.spinner("Analyzing schema and generating questions..."):
             schema_success, schema_data = analyze_database_schema()
             if schema_success and ((st.session_state.selected_llm == "groq" and st.session_state.groq_client) or 
-                                  (st.session_state.selected_llm == "openai" and st.session_state.openai_client)):
+                                  (st.session_state.selected_llm == "openai" and st.session_state.openai_client) or
+                                  (st.session_state.selected_llm == "gemini" and st.session_state.gemini_client)):
                 questions = generate_intelligent_questions(schema_data)
                 st.session_state.ai_generated_questions = questions
                 st.session_state.questions_generated = True
@@ -371,4 +408,31 @@ with st.expander("Run raw MCP tools"):
     if st.button("Run MCP Tool"):
         result, exec_time = execute_mcp_tool(tool, **params)
         st.write(f"Time: {exec_time:.2f}s")
-        st.write(result)
+        
+        try:
+            # Parse the JSON result
+            data = json.loads(result)
+            
+            # Display results based on the tool and data structure
+            if isinstance(data, list) and len(data) > 0:
+                if tool == "health_check":
+                    st.success("Database connection is healthy" if data[0].get("healthy") == 1 else "Database health check failed")
+                elif len(data) == 1 and "affected_rows" in data[0]:
+                    st.info(f"Query executed successfully. Affected rows: {data[0]['affected_rows']}")
+                else:
+                    # Convert to DataFrame for tabular display
+                    import pandas as pd
+                    df = pd.DataFrame(data)
+                    st.dataframe(df)
+                    
+                    # Show row count
+                    st.text(f"Total rows: {len(data)}")
+            elif isinstance(data, list) and len(data) == 0:
+                st.info("No results returned")
+            else:
+                # Fallback to pretty-printed JSON for complex structures
+                st.json(data)
+        except Exception as e:
+            # If JSON parsing fails, show the raw result
+            st.error(f"Error parsing result: {str(e)}")
+            st.code(result)
