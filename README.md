@@ -5,7 +5,7 @@ An MCP server for PostgreSQL that generates questions and uses tools to answer q
 ## Features
 
 - Connect to any PostgreSQL database
-- Choose between Groq and OpenAI as your LLM provider
+- Choose between Groq, OpenAI, or Gemini as your LLM provider
 - Automatically analyze database schema
 - Generate intelligent questions based on your database structure
 - Execute SQL queries through natural language
@@ -29,6 +29,7 @@ An MCP server for PostgreSQL that generates questions and uses tools to answer q
 1. Obtain API keys:
    - Groq API key: https://console.groq.com/
    - OpenAI API key: https://platform.openai.com/
+   - Gemini API key: https://ai.google.dev/
 
 2. Enter your database credentials:
    - Host
@@ -39,7 +40,7 @@ An MCP server for PostgreSQL that generates questions and uses tools to answer q
 
 ## Usage
 
-1. Select your preferred LLM provider (Groq or OpenAI)
+1. Select your preferred LLM provider (Groq, OpenAI, or Gemini)
 2. Enter your API key
 3. Connect to your PostgreSQL database
 4. The application will analyze your schema and generate relevant questions
@@ -56,7 +57,7 @@ An MCP server for PostgreSQL that generates questions and uses tools to answer q
 ## Troubleshooting
 
 If you're experiencing low accuracy with queries:
-- Try switching between Groq and OpenAI to see which works better for your use case
+- Try switching between Groq, OpenAI, and Gemini to see which works better for your use case
 - Make sure your database schema is properly analyzed
 - Check that foreign key relationships are properly defined in your database
 - Use more specific questions that reference actual table and column names

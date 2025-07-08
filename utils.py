@@ -39,9 +39,12 @@ def handle_general_question(user_question):
     if selected_llm == "groq":
         llm_client = st.session_state.get("groq_client")
         model_name = "llama3-8b-8192"
-    else:  # OpenAI
+    elif selected_llm == "openai":  # OpenAI
         llm_client = st.session_state.get("openai_client")
         model_name = "gpt-3.5-turbo"
+    else:  # Gemini
+        llm_client = st.session_state.get("gemini_client")
+        model_name = "gemini-2.0-flash"  # Updated to use the latest model
         
     mcp_client = st.session_state.get("mcp_client")
     schema_cache = st.session_state.get("schema_cache", {})
@@ -87,14 +90,36 @@ User Question:
 """
 
     try:
-        response = llm_client.chat.completions.create(
-            messages=[{"role": "user", "content": planning_prompt}],
-            model=model_name,
-            temperature=0,
-            max_tokens=1000,
-        )
-        tool_plan_raw = response.choices[0].message.content.strip()
-        tool_plan = json.loads(tool_plan_raw)
+        if selected_llm in ["groq", "openai"]:
+            response = llm_client.chat.completions.create(
+                messages=[{"role": "user", "content": planning_prompt}],
+                model=model_name,
+                temperature=0,
+                max_tokens=1000,
+            )
+            tool_plan_raw = response.choices[0].message.content.strip()
+        else:  # Gemini
+            response = llm_client.generate_content(planning_prompt)
+            tool_plan_raw = response.text.strip()
+            
+            # Extract JSON from Gemini's response which might contain markdown or other text
+            import re
+            json_match = re.search(r'```(?:json)?\s*({.*?})\s*```', tool_plan_raw, re.DOTALL)
+            if json_match:
+                tool_plan_raw = json_match.group(1)
+            else:
+                # Try to find JSON object without code blocks
+                json_match = re.search(r'({[\s\S]*?})', tool_plan_raw)
+                if json_match:
+                    tool_plan_raw = json_match.group(1)
+            
+            # Clean up any potential markdown or text artifacts
+            tool_plan_raw = tool_plan_raw.strip()
+            
+        try:
+            tool_plan = json.loads(tool_plan_raw)
+        except json.JSONDecodeError as e:
+            return f"Failed to parse JSON response: {e}. Raw response: {tool_plan_raw[:100]}..."
 
         tool = tool_plan.get("tool")
         params = tool_plan.get("params", {})
@@ -126,9 +151,12 @@ You are a smart AI that just used the MCP tool `{tool}`.
 
 Now, interpret the result below and explain it to the user in simple, helpful language. 
 "Use PostgreSQL-compatible SQL syntax. Avoid MySQL-only functions."
-Don't show SQL or raw JSON. Just give the answer in plain English.
-"Make sure questions reflect actual foreign-key relationships and available columns. Avoid assuming that one table contains information that must be joined from another."
+Don't show raw JSON. Format your response as follows:
 
+1. For tabular data: Present the information in a well-formatted markdown table
+2. For relationships: Clearly explain the relationships between tables
+3. For query results: Summarize the data and highlight key insights
+4. For errors: Explain what went wrong in simple terms
 
 User Question:
 {user_question}
@@ -138,13 +166,24 @@ Result:
 """
 
     try:
-        response = llm_client.chat.completions.create(
-            messages=[{"role": "user", "content": interpretation_prompt}],
-            model=model_name,
-            temperature=0.7,
-            max_tokens=1000,
-        )
-        final_answer = response.choices[0].message.content.strip()
+        if selected_llm in ["groq", "openai"]:
+            response = llm_client.chat.completions.create(
+                messages=[{"role": "user", "content": interpretation_prompt}],
+                model=model_name,
+                temperature=0.7,
+                max_tokens=1000,
+            )
+            final_answer = response.choices[0].message.content.strip()
+        else:  # Gemini
+            response = llm_client.generate_content(interpretation_prompt)
+            final_answer = response.text.strip()
+            
+            # Clean up any potential markdown formatting
+            import re
+            final_answer = re.sub(r'```.*?```', '', final_answer, flags=re.DOTALL)
+            final_answer = re.sub(r'^[*#].*$', '', final_answer, flags=re.MULTILINE)
+            final_answer = final_answer.strip()
+            
         return final_answer
     except Exception as e:
         return f" Failed to interpret tool result: {e}"

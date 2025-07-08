@@ -10,3 +10,4 @@ psycopg2-binary>=2.9.9
 tenacity>=8.2.3
 groq
 openai>=1.0.0
+google-generativeai>=0.3.0
